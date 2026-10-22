@@ -85,7 +85,7 @@ A Dependabot PR is merged only when **all** of these hold:
 
 1. CI (`Lint` + `Tests`) succeeded.
 2. Claude's verdict is `ok`.
-3. The highest update in the PR is a patch or minor — the highest of `dependabot/fetch-metadata` and of the `update-type` lines in every Dependabot commit message, never the agent's word. Majors are reviewed and commented, never merged; an update type that cannot be determined never merges either.
+3. The highest update in the PR is a patch or minor — the highest of `dependabot/fetch-metadata` and of the `update-type` lines in every Dependabot commit message, never the agent's word. Majors are reviewed and commented, never merged — the Merge job comments `Not auto-merged: …` on them; an update type that cannot be determined never merges either.
 4. Every commit in the PR is Dependabot's (with a verified signature) or a trusted actor's, the run was triggered by one of them, and the head is still the reviewed commit (`--match-head-commit`).
 5. `automerge` is `minor`.
 

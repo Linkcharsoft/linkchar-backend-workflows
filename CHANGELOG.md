@@ -2,6 +2,10 @@
 
 Releases follow semver from the caller's point of view: a **major** is anything a project's `ci.yml` must adapt to.
 
+## 1.2.0
+
+- `dependabot-review.yml`: when the review clears a PR whose update type is not auto-merged (a major, or an unknown type), the Merge job now comments "Not auto-merged: …" instead of only logging it, so whoever follows the PR (a person or a panel) knows it is waiting to be tested.
+
 ## 1.1.0
 
 - `dependabot-review.yml`: `deploy-workflow` input (default empty). A merge made with `GITHUB_TOKEN` starts no `push` workflow, so a project that deploys on push to `main` never deployed an auto-merged bump. When set, the named workflow is dispatched on the base branch after a successful merge; if the dispatch fails, the PR gets a comment asking for a manual deploy and the Merge job fails. The deploy workflow needs a `workflow_dispatch` trigger and jobs that accept it on `main`, and the calling job needs `actions: write`.
