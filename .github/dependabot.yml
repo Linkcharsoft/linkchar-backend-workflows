@@ -1,0 +1,21 @@
+version: 2
+
+updates:
+  # No `labels:` on purpose: custom labels must already exist, while the defaults are created by Dependabot.
+  # Bumps the actions the shared workflows pin; each release then reaches the projects as a bump of this repo.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Argentina/Buenos_Aires
+    # Conventional commits, like the backend projects: Dependabot appends ":" to the prefix.
+    commit-message:
+      prefix: ci
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
