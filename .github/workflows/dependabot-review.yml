@@ -31,6 +31,13 @@ on:
           e.g. the bot that pushes fix commits. Their commits are reviewed as a code change.
         type: string
         default: inferencia-runner[bot]
+      deploy-workflow:
+        description: >-
+          File name of the caller's workflow that deploys the base branch (e.g. ci.yml, aws-main.yml). When set, it
+          is dispatched on the base branch after a merge, because a merge made with GITHUB_TOKEN fires no push
+          workflows. It needs a workflow_dispatch trigger, and the calling job must grant `actions: write`.
+        type: string
+        default: ''
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: >-
@@ -38,8 +45,9 @@ on:
           (runs triggered by a trusted actor's push).
         required: false
 
-permissions:
-  contents: read
+# No workflow-level `permissions`: the merge job declares none, so it inherits the calling job's grant. Declaring
+# `actions: write` there would fail the whole run at startup for every caller that grants only `actions: read`,
+# even when the job is skipped; inheriting it lets only the callers that set `deploy-workflow` grant it.
 
 jobs:
   review:
@@ -292,11 +300,11 @@ jobs:
     if: needs.review.outputs.verdict == 'ok' && inputs.automerge == 'minor'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: write
-      pull-requests: write
+    # Inherits the calling job's permissions (see the note above `jobs`): contents and pull-requests write to
+    # merge and comment, plus actions write when `deploy-workflow` is set.
     steps:
       - name: Merge patch/minor bumps with green CI
+        id: merge
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -335,4 +343,24 @@ jobs:
           if ! gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch \
             --match-head-commit "$SHA" --subject "$subject"; then
             comment "The review and CI cleared this PR, but GitHub refused the merge — usually a conflict with the base branch. Comment \`@dependabot rebase\` and it will merge on the next run."
+            exit 0
           fi
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      # A push made with GITHUB_TOKEN triggers no `push` workflow, so the caller's deploy never runs on its own after
+      # the merge above; a workflow_dispatch made with the same token does.
+      - name: Trigger the deploy
+        if: steps.merge.outputs.merged == 'true' && inputs.deploy-workflow != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+          DEPLOY_WORKFLOW: ${{ inputs.deploy-workflow }}
+        run: |
+          set -euo pipefail
+          if ! gh workflow run "$DEPLOY_WORKFLOW" --repo "$GITHUB_REPOSITORY" --ref "$BASE_REF"; then
+            echo "::error::Merged, but \`$DEPLOY_WORKFLOW\` could not be dispatched on $BASE_REF — start the deploy by hand."
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "This PR was merged, but the deploy workflow \`$DEPLOY_WORKFLOW\` could not be triggered on \`$BASE_REF\`. Start it by hand (*Actions → $DEPLOY_WORKFLOW → Run workflow* on \`$BASE_REF\`), or \`$BASE_REF\` stays ahead of what is deployed."
+            exit 1
+          fi
+          echo "Dispatched $DEPLOY_WORKFLOW on $BASE_REF."

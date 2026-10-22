@@ -2,13 +2,13 @@
 
 Shared, versioned GitHub Actions workflows for Linkchar's **backend** projects (Django + uv, the ones started from `django-base-project`).
 
-**Backend only, on purpose.** Tags version the whole repository, so a release here becomes a Dependabot bump PR — review, auto-merge, production redeploy — in every project that calls it. Frontend workflows live in [`linkchar-frontend-workflows`](https://github.com/Linkcharsoft/linkchar-frontend-workflows), which follows the same pattern; keeping them apart means a release of one never opens PRs in the other's projects.
+**Backend only, on purpose.** Tags version the whole repository, so a release here becomes a Dependabot bump PR — review, auto-merge and, where `deploy-workflow` is set, a production redeploy — in every project that calls it. Frontend workflows live in [`linkchar-frontend-workflows`](https://github.com/Linkcharsoft/linkchar-frontend-workflows), which follows the same pattern; keeping them apart means a release of one never opens PRs in the other's projects.
 
 Each project calls these workflows from its `ci.yml`, pinned to a release tag. Dependabot bumps that tag like any other action, so improving a workflow here means one release, and every project receives it as a reviewed PR. There is no shared CI workflow: each backend keeps its own Lint and Tests jobs, because they depend on the project's services and settings.
 
 | Workflow | What it does |
 | --- | --- |
-| [`dependabot-review.yml`](.github/workflows/dependabot-review.yml) | On Dependabot PRs only: Claude reads the changelog of every bumped package (`pyproject.toml`, `uv.lock`, the Dockerfile's base image, workflow actions), checks whether the project uses what changed — and, when CI fails, reads the failed jobs' logs — and returns a verdict; the workflow posts it as a comment and squash-merges patch/minor bumps that passed review **and** CI. Fix commits pushed to the PR by a [trusted actor](#fix-commits-from-a-trusted-actor) are reviewed as a code change in the same pass. |
+| [`dependabot-review.yml`](.github/workflows/dependabot-review.yml) | On Dependabot PRs only: Claude reads the changelog of every bumped package (`pyproject.toml`, `uv.lock`, the Dockerfile's base image, workflow actions), checks whether the project uses what changed — and, when CI fails, reads the failed jobs' logs — and returns a verdict; the workflow posts it as a comment and squash-merges patch/minor bumps that passed review **and** CI, then dispatches the project's deploy workflow when [`deploy-workflow`](#deploying-after-the-merge) is set. Fix commits pushed to the PR by a [trusted actor](#fix-commits-from-a-trusted-actor) are reviewed as a code change in the same pass. |
 
 ## Usage
 
@@ -46,9 +46,9 @@ jobs:
     needs: [lint, test]
     # Dependabot's PRs, whoever pushed last: the called workflow decides which pushers it trusts.
     if: ${{ !cancelled() && github.event.pull_request.user.login == 'dependabot[bot]' }}
-    uses: Linkcharsoft/linkchar-backend-workflows/.github/workflows/dependabot-review.yml@v1.0.0
+    uses: Linkcharsoft/linkchar-backend-workflows/.github/workflows/dependabot-review.yml@v1.1.0
     permissions:
-      actions: read
+      actions: write # dispatches deploy-workflow; `read` is enough when deploy-workflow is not set
       contents: write
       pull-requests: write
       id-token: write
@@ -58,6 +58,8 @@ jobs:
       # "success" only when every job above succeeded; failed, cancelled or skipped all count as not.
       ci-result: ${{ (needs.lint.result == 'success' && needs.test.result == 'success') && 'success' || 'failure' }}
       automerge: ${{ vars.DEPENDABOT_AUTOMERGE || 'minor' }}
+      # The project's deploy workflow; leave it out if the project has none. See "Deploying after the merge".
+      deploy-workflow: aws-main.yml
 ```
 
 When a project adds a CI job, add it to `needs` **and** to the `ci-result` expression, or a failure in it will not block the merge.
@@ -75,6 +77,7 @@ Plus `.github/dependabot.yml`, which GitHub reads only from the project itself a
 | `model` | `claude-sonnet-5-5` | Model used for the review. |
 | `max-turns` | `40` | Caps the agent's turns on large grouped PRs. |
 | `trusted-actors` | `inferencia-runner[bot]` | Comma-separated logins, besides Dependabot, allowed to push fix commits to a Dependabot PR and still get it reviewed and merged. See [below](#fix-commits-from-a-trusted-actor). |
+| `deploy-workflow` | empty | File name of the project's workflow that deploys the base branch (e.g. `ci.yml`, `aws-main.yml`). After a merge it is dispatched on the base branch. Empty dispatches nothing. See [below](#deploying-after-the-merge). |
 
 ### Merge policy
 
@@ -88,7 +91,19 @@ A Dependabot PR is merged only when **all** of these hold:
 
 The squash commit is titled with the PR title (which carries the prefix set in the project's `dependabot.yml`) plus `(#N)`.
 
-> **Merging to `main` can deploy to production.** In a project whose deploy pipeline runs on push to `main`, an auto-merged bump ships without a human in the loop. Lint, the test suite and the migrations check are the gate; the Claude verdict is a changelog review, not a security control — a `cooldown` in `dependabot.yml` is what keeps a freshly published malicious release out.
+> **An auto-merge can deploy to production.** With `deploy-workflow` set, an auto-merged bump ships without a human in the loop. Lint, the test suite and the migrations check are the gate; the Claude verdict is a changelog review, not a security control — a `cooldown` in `dependabot.yml` is what keeps a freshly published malicious release out.
+
+### Deploying after the merge
+
+The merge is made with the run's `GITHUB_TOKEN`, and GitHub does not start `push` workflows for pushes made with that token. A project that deploys on push to `main` therefore does **not** deploy an auto-merged bump on its own: `main` moves ahead of production until the next human push. `GITHUB_TOKEN` *can* start `workflow_dispatch` workflows, so after a successful merge the workflow runs `gh workflow run <deploy-workflow> --ref <base branch>`.
+
+A project that sets `deploy-workflow` needs:
+
+1. A `workflow_dispatch:` trigger in the deploy workflow.
+2. Deploy jobs whose conditions accept a dispatch on `main`, not only a push: e.g. `if: github.ref == 'refs/heads/main'` instead of `if: github.event_name == 'push'`.
+3. `actions: write` on the calling job (the `dependabot` job above). A called workflow cannot raise the caller's permissions, and the merge job inherits the caller's grant precisely so that projects without a deploy workflow can keep `actions: read`.
+
+If the dispatch fails (the file does not exist, it has no `workflow_dispatch` trigger, or `actions: write` is missing), the PR gets a comment saying the merge landed but the deploy has to be started by hand, and the Merge job fails so the run shows red.
 
 ### Fix commits from a trusted actor
 
